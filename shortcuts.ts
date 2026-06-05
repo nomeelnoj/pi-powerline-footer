@@ -43,5 +43,33 @@ export function matchesConfiguredShortcut(data: string, shortcut: string): boole
     return SUPER_SHORTCUT_PATTERNS.get(normalizedShortcut)?.test(data) ?? false;
   }
 
-  return matchesKey(data, shortcut);
+  if (matchesKey(data, shortcut)) {
+    return true;
+  }
+
+  // Legacy fallback for ctrl+alt+<letter>.
+  //
+  // Some sessions deliver these as ESC + control-char (e.g. "\x1b\x05" for
+  // ctrl+alt+e) when the Kitty keyboard protocol is not active at the terminal
+  // level. matchesKey only accepts that legacy form while its internal
+  // kitty-protocol flag is false, but that flag can desync from the real
+  // terminal state — notably inside the fixed-editor compositor, where the
+  // terminal reverts to legacy encoding while the flag stays true. Accept the
+  // legacy encoding explicitly so these shortcuts keep working either way.
+  return matchesLegacyCtrlAltLetter(data, normalizedShortcut);
+}
+
+function matchesLegacyCtrlAltLetter(data: string, normalizedShortcut: string): boolean {
+  const parts = normalizedShortcut.split("+");
+  if (parts.length !== 3 || parts[0] !== "ctrl" || parts[1] !== "alt") {
+    return false;
+  }
+
+  const key = parts[2];
+  if (key.length !== 1 || key < "a" || key > "z") {
+    return false;
+  }
+
+  const controlChar = String.fromCharCode(key.charCodeAt(0) & 0x1f);
+  return data === `\x1b${controlChar}`;
 }
