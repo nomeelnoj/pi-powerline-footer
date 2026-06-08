@@ -35,7 +35,7 @@ import { createWelcomeDismissScheduler } from "./welcome-dismiss.ts";
 import { createRenderScheduler } from "./render-scheduler.ts";
 import { readCoreContextUsage } from "./context-usage.ts";
 import { renderFixedEditorCluster } from "./fixed-editor/cluster.ts";
-import { emergencyTerminalModeReset, TerminalSplitCompositor } from "./fixed-editor/terminal-split.ts";
+import { TerminalSplitCompositor } from "./fixed-editor/terminal-split.ts";
 import { getDefaultColors } from "./theme.ts";
 import {
   isSupportedSuperShortcut,
@@ -1260,7 +1260,16 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     statusRenderScheduler.cancel();
     restoreFooterStatusRepaintHook?.();
     restoreFooterStatusRepaintHook = null;
-    teardownFixedEditorCompositor({ resetExtendedKeyboardModes: true });
+    // Ownership-based cleanup: powerline only ever pushes extended keyboard
+    // modes through the fixed-editor compositor, so on shutdown it must only
+    // restore what that compositor pushed (handled by its own dispose) and must
+    // NOT pop-all with resetExtendedKeyboardModes. session_shutdown fires on
+    // reload/resume/new/fork (same process + terminal, no Kitty re-handshake)
+    // as well as quit; a pop-all here clobbers pi-core's Kitty frame, drops the
+    // terminal to legacy encoding, and breaks Ctrl+Alt shortcuts (including
+    // other extensions' pi.registerShortcut bindings like pi-copy-code's
+    // ctrl+alt+c). pi-core owns and cleans up its own keyboard state on exit.
+    teardownFixedEditorCompositor();
     stashShortcutInputUnsubscribe?.();
     stashShortcutInputUnsubscribe = null;
     shellSession?.dispose();
@@ -2245,15 +2254,17 @@ export default function powerlineFooter(pi: ExtensionAPI) {
   }
 
   function teardownFixedEditorCompositor(options?: { resetExtendedKeyboardModes?: boolean }) {
-    const hadCompositor = fixedEditorCompositor !== null;
+    // Only the fixed-editor compositor pushes (and therefore must restore)
+    // extended keyboard modes. When no compositor is active (e.g. fixedEditor
+    // is disabled), powerline owns no keyboard state to clean up. Emitting the
+    // emergency reset here pops pi-core's Kitty keyboard-protocol frame during
+    // /reload (session_shutdown fires on reload), leaving the terminal in the
+    // legacy ESC+Ctrl-char encoding. That silently breaks every other
+    // extension relying on pi.registerShortcut() for Ctrl+Alt+<letter> keys
+    // (e.g. pi-copy-code's ctrl+alt+c), since pi-core never re-runs the Kitty
+    // handshake after reload. Defer entirely to the compositor's own dispose,
+    // which restores exactly the modes it enabled.
     fixedEditorCompositor?.dispose(options);
-    if (!hadCompositor && options?.resetExtendedKeyboardModes) {
-      try {
-        process.stdout.write(emergencyTerminalModeReset());
-      } catch {
-        // Shutdown cleanup cannot surface useful terminal write failures.
-      }
-    }
     fixedEditorCompositor = null;
     fixedStatusContainer = null;
     fixedEditorContainer = null;

@@ -159,11 +159,29 @@ test("fixed editor captures Pi status messages with the editor cluster", () => {
   assert.match(source, /fixedStatusContainer = null/);
 });
 
-test("shutdown cleanup resets terminal modes even before compositor install", () => {
-  assert.match(source, /import \{ emergencyTerminalModeReset, TerminalSplitCompositor \}/);
-  assert.match(source, /const hadCompositor = fixedEditorCompositor !== null/);
-  assert.match(source, /if \(!hadCompositor && options\?\.resetExtendedKeyboardModes\)/);
-  assert.match(source, /process\.stdout\.write\(emergencyTerminalModeReset\(\)\)/);
+test("shutdown cleanup does not reset keyboard modes powerline never enabled", () => {
+  // Regression: powerline must only restore extended keyboard modes via the
+  // compositor that enabled them. When no compositor is active (fixedEditor
+  // disabled), it must NOT emit emergencyTerminalModeReset(), which would pop
+  // pi-core's Kitty keyboard-protocol frame on /reload and break other
+  // extensions' Ctrl+Alt shortcuts (e.g. pi-copy-code).
+  assert.match(source, /import \{ TerminalSplitCompositor \}/);
+  assert.doesNotMatch(source, /emergencyTerminalModeReset/);
+  assert.doesNotMatch(source, /if \(!hadCompositor && options\?\.resetExtendedKeyboardModes\)/);
+  assert.match(source, /fixedEditorCompositor\?\.dispose\(options\);\n\s+fixedEditorCompositor = null;/);
+});
+
+test("session shutdown never pops keyboard modes powerline does not own", () => {
+  // Regression: session_shutdown fires on reload/resume/new/fork (same process
+  // and terminal, no Kitty re-handshake) as well as quit. Powerline must use
+  // ownership-based cleanup — the compositor restores only the frame it pushed
+  // — and must NOT pass resetExtendedKeyboardModes (pop-all) on shutdown, which
+  // would clobber pi-core's Kitty frame and break Ctrl+Alt shortcuts (its own
+  // and other extensions', e.g. pi-copy-code) after /reload.
+  // No caller may request the pop-all reset, and the reason-based gate is gone.
+  assert.doesNotMatch(source, /teardownFixedEditorCompositor\(\{ resetExtendedKeyboardModes: true \}\)/);
+  assert.doesNotMatch(source, /isTerminalExit/);
+  assert.match(source, /pi\.on\("session_shutdown", async \(\) => \{/);
 });
 
 test("powerline shortcut defaults do not claim reserved Pi shortcuts", () => {
