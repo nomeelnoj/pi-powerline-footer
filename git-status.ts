@@ -64,6 +64,12 @@ function runGit(args: string[], timeoutMs = 200): Promise<string | null> {
   return new Promise((resolve) => {
     const proc = spawn("git", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      // Background pollers must not contend for .git/index.lock. `git status`
+      // normally takes that lock to refresh the index's cached stat info, which
+      // races with real git commands the user runs in the same repo (failed
+      // commits/adds with "Unable to create '.git/index.lock'"). GIT_OPTIONAL_LOCKS=0
+      // makes git skip the optional lock; status output is unchanged.
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
     });
 
     let stdout = "";
